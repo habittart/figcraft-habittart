@@ -254,7 +254,7 @@ index 2c584eb..f2ad739 100644
              continue;
          }
          // Skip very large files (colour emoji); they are not outline fonts we can draw anyway.
-@@ -707,6 +16,20 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
+@@ -707,6 +716,20 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
      }
  }
  
