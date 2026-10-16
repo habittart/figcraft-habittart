@@ -145,7 +145,7 @@ index 0000000..81804ae
 +    }
 +}
 diff --git a/apps/figcraft/src/main.rs b/apps/figcraft/src/main.rs
-index 5d4eac3..8459040 100644
+index 0332f7d..6aaae15 100644
 --- a/apps/figcraft/src/main.rs
 +++ b/apps/figcraft/src/main.rs
 @@ -10,6 +10,8 @@
@@ -156,8 +156,8 @@ index 5d4eac3..8459040 100644
 +mod color_match;
  mod control_server;
  mod gamepad;
- mod recovery;
-@@ -42,16 +44,26 @@ struct App {
+ mod graphics;
+@@ -47,14 +49,24 @@ struct App {
  
  impl eframe::App for App {
      fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -175,9 +175,7 @@ index 5d4eac3..8459040 100644
 +        // here then, so an agent can keep working while FigCraft is in the background.
 +        let hidden = !ctx.input(|i| i.viewport().visible().unwrap_or(true));
          let title = with_app(|fig| {
-             let mut q = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-             fig.control_queue.extend(q.drain(..));
-             drop(q);
+             control_server::drain_queue(&self.queue, &mut fig.control_queue);
 +            if hidden && !fig.control_queue.is_empty() {
 +                figcraft_ui_egui::windows::guard(fig, ctx, |fig| figcraft_ui_egui::control::drain(fig, ctx));
 +            }
@@ -185,10 +183,10 @@ index 5d4eac3..8459040 100644
              // windows are open).
              figcraft_ui_egui::windows::on_close_request(fig, ctx);
 diff --git a/crates/format/src/fig/map.rs b/crates/format/src/fig/map.rs
-index b3a9587..25ee5a3 100644
+index 787ca6d..e397d62 100644
 --- a/crates/format/src/fig/map.rs
 +++ b/crates/format/src/fig/map.rs
-@@ -1367,6 +1367,27 @@ fn paint(p: &Kv) -> Option<Value> {
+@@ -1456,6 +1456,27 @@ fn paint(p: &Kv) -> Option<Value> {
              if let Some(r) = num(p, "rotation") {
                  o.insert("rotation".into(), json!(r));
              }
