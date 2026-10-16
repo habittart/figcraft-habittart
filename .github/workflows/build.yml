@@ -158,3 +158,7 @@ jobs:
             --title "FigCraft $UP (Habittart)" \
             --notes "FigCraft $UP da storytold/figcraft com as correções Habittart: cores com gerenciamento de cor no macOS, fontes do Adobe Fonts (macOS e Windows), saturação de imagens importadas do Figma, comandos do MCP com o app em segundo plano, e o proxy MCP resiliente." \
             dist/*.zip
+          # Only the newest build stays: older ones (and their tags) go.
+          gh release list -R "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' | while read -r t; do
+            [ "$t" = "$REL" ] || gh release delete "$t" -R "$GITHUB_REPOSITORY" -y --cleanup-tag || true
+          done
