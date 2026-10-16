@@ -1,0 +1,5 @@
+# Keep line endings exactly as written, on every OS: the patches must match the upstream sources
+# byte for byte, and the shell scripts must keep LF to run on macOS.
+* text=auto eol=lf
+*.patch -text
+*.cmd text eol=crlf

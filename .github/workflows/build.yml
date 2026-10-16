@@ -76,6 +76,9 @@ jobs:
           repository: storytold/figcraft
           ref: ${{ needs.check.outputs.upstream }}
           path: src
+          # Full history: lets `git apply --3way` find the files the patch was written against, so
+          # it still applies after upstream moves the surrounding code.
+          fetch-depth: 0
       - uses: actions/checkout@v4
         if: needs.check.outputs.fonts != ''
         with:
@@ -86,9 +89,16 @@ jobs:
         shell: bash
         working-directory: src
         run: |
+          git config user.name ci; git config user.email ci@localhost
           for p in ../meta/patches/*.patch; do
-            echo "applying $p"
-            git apply --3way --whitespace=nowarn "$p"
+            echo "== applying $p"
+            if git apply --whitespace=nowarn "$p"; then echo "   applied"; continue; fi
+            if git apply --3way --whitespace=nowarn "$p" && ! git diff --name-only --diff-filter=U | grep -q .; then echo "   applied (3-way)"; continue; fi
+            git checkout -- . 2>/dev/null; git reset -q --hard; git clean -fdq
+            for q in ../meta/patches/*.patch; do [ "$q" = "$p" ] && break; git apply --whitespace=nowarn "$q" || git apply --3way --whitespace=nowarn "$q"; done
+            if patch -p1 --forward --fuzz=3 --no-backup-if-mismatch -i "$p"; then echo "   applied (fuzzy)"; continue; fi
+            echo "::error::$p no longer applies to FigCraft ${{ needs.check.outputs.upstream }}: the patch needs updating. The computers keep the last good version."
+            exit 1
           done
           git status --short
       - uses: dtolnay/rust-toolchain@stable
