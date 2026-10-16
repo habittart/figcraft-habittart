@@ -1,8 +1,18 @@
 {
   "prefs": {
     "theme": "dark",
-    "publish_server": "wss://137-131-161-80.sslip.io/",
+    "language": "system",
+    "user_name": "Marcos Oliveira",
+    "nudge_small": 1.0,
+    "nudge_big": 10.0,
+    "keep_tool": false,
+    "rename_duplicates": false,
+    "highlight_on_hover": true,
+    "number_keys_opacity": true,
+    "show_dimensions": true,
+    "reduce_motion": false,
     "invite_links": true,
+    "publish_server": "wss://137-131-161-80.sslip.io/",
     "getting_started_dismissed": true
   }
 }
