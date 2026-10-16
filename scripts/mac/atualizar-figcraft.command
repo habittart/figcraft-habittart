@@ -28,9 +28,12 @@ UP=${TAG%%-habittart*}
 EXE_NAME=$(/usr/bin/defaults read "$APP/Contents/Info" CFBundleExecutable 2>/dev/null || echo FigCraft)
 EXE="$APP/Contents/MacOS/$EXE_NAME"
 CUR=$(cat "$STATE/installed.txt" 2>/dev/null || true)
+# The corrected executable must run inside the official bundle of the same version (resources,
+# Info.plist): if the FigCraft.app here is another version, the official one of $UP is reinstalled.
+APPVER=$(/usr/bin/defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)
 PATCHED=0
 [ -f "$EXE" ] && grep -q "colour matching: tagged" "$EXE" && PATCHED=1
-if [ "$TAG" = "$CUR" ] && [ "$PATCHED" = 1 ] && [ -x "$HOME/bin/figcraft-cli-bin" ]; then
+if [ "$TAG" = "$CUR" ] && [ "$PATCHED" = 1 ] && [ "$APPVER" = "${UP#v}" ] && [ -x "$HOME/bin/figcraft-cli-bin" ]; then
   echo "FigCraft ja esta na versao mais recente ($TAG)"; exit 0
 fi
 
@@ -48,11 +51,14 @@ echo "== baixando $TAG"
 curl -fsSL -o "$TMP/fc.zip" "$URL"
 /usr/bin/ditto -x -k "$TMP/fc.zip" "$TMP/fc"
 
-if [ ! -d "$APP" ]; then
-  echo "== FigCraft.app nao encontrado: instalando o oficial $UP"
+if [ ! -d "$APP" ] || [ "$APPVER" != "${UP#v}" ]; then
+  echo "== instalando o FigCraft.app oficial $UP (havia: ${APPVER:-nenhum})"
   curl -fsSL -o "$TMP/fc.dmg" "https://github.com/storytold/figcraft/releases/download/$UP/figcraft-${UP#v}-macos-universal.dmg"
   MNT=$(/usr/bin/hdiutil attach -nobrowse -readonly "$TMP/fc.dmg" | awk -F'\t' '/\/Volumes\//{print $NF}' | tail -1)
-  /usr/bin/ditto "$MNT/FigCraft.app" "$APP"
+  [ -d "$MNT/FigCraft.app" ] || { echo "nao achei o FigCraft.app no instalador oficial"; exit 1; }
+  rm -rf "$APP.new" && /usr/bin/ditto "$MNT/FigCraft.app" "$APP.new"
+  rm -rf "$APP" && mv "$APP.new" "$APP"
+  PATCHED=0
   /usr/bin/hdiutil detach "$MNT" -quiet || true
   EXE_NAME=$(/usr/bin/defaults read "$APP/Contents/Info" CFBundleExecutable)
   EXE="$APP/Contents/MacOS/$EXE_NAME"

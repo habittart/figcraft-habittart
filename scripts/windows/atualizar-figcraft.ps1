@@ -40,7 +40,18 @@ if ($tag -ne $cur -or -not (Test-Path $exe)) {
         $p = Join-Path $Dir $n
         if (Test-Path $p) { Rename-Item $p "$n.old-$stamp" -ErrorAction SilentlyContinue }
     }
-    Expand-Archive -Path $zip -DestinationPath $Dir -Force
+    try {
+        Expand-Archive -Path $zip -DestinationPath $Dir -Force
+        if (-not (Test-Path $exe)) { throw 'o pacote nao trouxe o figcraft.exe' }
+    } catch {
+        # Volta para a versao anterior em vez de deixar o FigCraft quebrado
+        foreach ($n in 'figcraft.exe', 'figcraft-cli.exe', 'figcraft-mcp.exe') {
+            $o = Join-Path $Dir "$n.old-$stamp"
+            if (Test-Path $o) { Move-Item $o (Join-Path $Dir $n) -Force -ErrorAction SilentlyContinue }
+        }
+        throw
+    }
+    Get-ChildItem $Dir -File | Unblock-File -ErrorAction SilentlyContinue
     Remove-Item $zip -Force -ErrorAction SilentlyContinue
     Set-Content -Path $stateFile -Value $tag
     $updated = $true
