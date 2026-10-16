@@ -64,6 +64,10 @@ jobs:
           - { os: windows-latest, name: windows-x64, exe: ".exe" }
     runs-on: ${{ matrix.os }}
     steps:
+      # Windows runners check out text files with CRLF, and the patches (LF) then don't apply.
+      - name: Keep LF line endings
+        shell: bash
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
         with:
           path: meta
