@@ -1,0 +1,146 @@
+# Builds FigCraft with the Habittart patches (patches/*.patch) for macOS (Apple Silicon) and
+# Windows (x64), plus the resilient MCP proxy (proxy/), every time storytold/figcraft releases a
+# new version or the patches change. Each build is published as a release of this repository;
+# the updaters in scripts/ install the latest one on each computer.
+name: build
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # checks for a new upstream release four times a day
+  push:
+    branches: [main]
+    paths: ["patches/**", "proxy/**", "scripts/**", ".github/workflows/build.yml"]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild even if this version was already built"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      upstream: ${{ steps.c.outputs.upstream }}
+      release: ${{ steps.c.outputs.release }}
+      build: ${{ steps.c.outputs.build }}
+      fonts: ${{ steps.c.outputs.fonts }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          UP=$(gh api repos/storytold/figcraft/releases/latest --jq .tag_name)
+          PH=$(cat patches/*.patch proxy/*.go scripts/*/* .github/workflows/build.yml | sha256sum | cut -c1-8)
+          REL="$UP-habittart-$PH"
+          # The craft-fonts commit the official release embeds (Inter and the bundled fonts).
+          FONTS=$(curl -fsSL "https://raw.githubusercontent.com/storytold/figcraft/$UP/.github/workflows/release.yml" | sed -n 's/^ *CRAFT_FONTS_REF: *\([0-9a-f]\{40\}\).*/\1/p' | head -1)
+          echo "upstream=$UP" >> "$GITHUB_OUTPUT"
+          echo "release=$REL" >> "$GITHUB_OUTPUT"
+          echo "fonts=$FONTS" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" != "true" ] && gh release view "$REL" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "build=false" >> "$GITHUB_OUTPUT"; echo "$REL already built"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"; echo "building $REL (craft-fonts $FONTS)"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, name: macos-arm64, exe: "" }
+          - { os: windows-latest, name: windows-x64, exe: ".exe" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: meta
+      - uses: actions/checkout@v4
+        with:
+          repository: storytold/figcraft
+          ref: ${{ needs.check.outputs.upstream }}
+          path: src
+      - uses: actions/checkout@v4
+        if: needs.check.outputs.fonts != ''
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ needs.check.outputs.fonts }}
+          path: craft-fonts
+      - name: Apply the Habittart patches
+        shell: bash
+        working-directory: src
+        run: |
+          for p in ../meta/patches/*.patch; do
+            echo "applying $p"
+            git apply --3way --whitespace=nowarn "$p"
+          done
+          git status --short
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: ${{ matrix.name }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Build FigCraft and figcraft-cli
+        shell: bash
+        working-directory: src
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: cargo build --release -p figcraft -p figcraft-cli
+      - name: Build the MCP proxy
+        shell: bash
+        working-directory: meta/proxy
+        run: go build -ldflags="-s -w" -o "../../figcraft-mcp${{ matrix.exe }}" .
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "src/target/release/figcraft${{ matrix.exe }}" out/
+          cp "src/target/release/figcraft-cli${{ matrix.exe }}" out/
+          cp "figcraft-mcp${{ matrix.exe }}" out/
+          cp meta/scripts/${{ startsWith(matrix.name, 'macos') && 'mac' || 'windows' }}/* out/
+          cp src/LICENSE-* src/NOTICE out/
+          [ -d craft-fonts/fonts ] && for l in craft-fonts/fonts/*/OFL.txt; do cp "$l" "out/OFL-$(basename "$(dirname "$l")").txt"; done || true
+          echo "${{ needs.check.outputs.release }}" > out/habittart-version.txt
+          cd out
+          if [ "${{ matrix.exe }}" = ".exe" ]; then 7z a -tzip "../figcraft-habittart-${{ matrix.name }}.zip" . >/dev/null; else zip -qry "../figcraft-habittart-${{ matrix.name }}.zip" .; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: figcraft-habittart-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+  release:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REL: ${{ needs.check.outputs.release }}
+          UP: ${{ needs.check.outputs.upstream }}
+        run: |
+          gh release delete "$REL" -R "$GITHUB_REPOSITORY" -y --cleanup-tag 2>/dev/null || true
+          gh release create "$REL" -R "$GITHUB_REPOSITORY" --latest \
+            --title "FigCraft $UP (Habittart)" \
+            --notes "FigCraft $UP da storytold/figcraft com as correções Habittart: cores com gerenciamento de cor no macOS, fontes do Adobe Fonts (macOS e Windows), saturação de imagens importadas do Figma, comandos do MCP com o app em segundo plano, e o proxy MCP resiliente." \
+            dist/*.zip
