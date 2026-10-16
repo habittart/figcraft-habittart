@@ -6,7 +6,7 @@ name: build
 
 on:
   schedule:
-    - cron: "17 */6 * * *"   # checks for a new upstream release four times a day
+    - cron: "17 9 * * 1"   # once a week (Monday 06:17 in Sao Paulo): a new upstream release gets built
   push:
     branches: [main]
     paths: ["patches/**", "proxy/**", "scripts/**", ".github/workflows/build.yml"]

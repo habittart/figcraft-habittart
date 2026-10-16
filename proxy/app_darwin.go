@@ -25,5 +25,5 @@ func quitApp() {
 }
 
 func launchApp() error {
-	return exec.Command("/usr/bin/open", "-n", "-a", *appPath, "--args", "--control", fmt.Sprint(*port)).Run()
+	return exec.Command("/usr/bin/open", "-a", *appPath, "--args", "--control", fmt.Sprint(*port)).Run()
 }

@@ -2,7 +2,9 @@
 # Instala ou atualiza o FigCraft Habittart neste Mac (Apple Silicon).
 # Baixa a versao mais recente de https://github.com/habittart/figcraft-habittart/releases, troca o executavel do
 # /Applications/FigCraft.app pelo corrigido, instala o figcraft-cli e o proxy do MCP em ~/bin,
-# liga o MCP no app do Claude e agenda a verificacao automatica (no login e a cada 6 horas).
+# liga o MCP no app do Claude e agenda a verificacao automatica (toda segunda-feira).
+# Toda vez tambem aplica as configuracoes gerais compartilhadas (settings/figcraft-settings.json do
+# repositorio) e o link do projeto online, para o FigCraft abrir direto nele.
 #
 #   Primeira vez (Terminal):
 #   curl -fsSL https://raw.githubusercontent.com/habittart/figcraft-habittart/main/scripts/mac/atualizar-figcraft.command | bash
@@ -17,7 +19,21 @@ mkdir -p "$STATE" "$HOME/bin"
 LOG="$STATE/update.log"
 if [ -t 1 ]; then exec > >(tee -a "$LOG") 2>&1; else exec >>"$LOG" 2>&1; fi
 echo "== $(date) $*"
+# Every FigCraft start (Dock, links, double-clicked files) gets the control channel for the Claude
+# MCP. The agent runs this at each login, so the setting survives restarts.
+/bin/launchctl setenv FIGCRAFT_CONTROL_PORT "$PORT" 2>/dev/null || true
 set -e
+
+# Configuracoes gerais iguais nos dois computadores, e o projeto online ao abrir o app.
+CFGDIR="$HOME/Library/Application Support/FigCraft"
+mkdir -p "$CFGDIR"
+if curl -fsSL -o "$CFGDIR/.habittart-settings.new" "https://raw.githubusercontent.com/$REPO/main/settings/figcraft-settings.json"; then
+  mv -f "$CFGDIR/.habittart-settings.new" "$CFGDIR/habittart-settings.json"
+fi
+for f in "$STATE/link-edicao-PRIVADO.txt" "$HOME/Documents/figcraft-oracle/link-edicao-PRIVADO.txt"; do
+  L=$(grep -o 'figcraft://join?[^ ]*' "$f" 2>/dev/null | head -1 || true)
+  if [ -n "$L" ]; then (umask 077; printf '%s\n' "$L" > "$CFGDIR/habittart-autojoin.txt"); break; fi
+done
 
 json() { /usr/bin/python3 -c "import sys,json; d=json.load(sys.stdin); $1"; }
 REL=$(curl -fsSL -H 'User-Agent: figcraft-habittart' "https://api.github.com/repos/$REPO/releases/latest") || { echo "sem rede ou sem versoes ainda"; exit 0; }
@@ -79,7 +95,8 @@ for pair in "figcraft-cli:figcraft-cli-bin" "figcraft-mcp:figcraft-cli"; do
   mv -f "$HOME/bin/.$dst.new" "$HOME/bin/$dst"
 done
 cp "$TMP/fc/atualizar-figcraft.command" "$STATE/atualizar-figcraft.command" && chmod +x "$STATE/atualizar-figcraft.command"
-printf '#!/bin/bash\nopen -n -a "%s" --args --control %s\n' "$APP" "$PORT" > "$HOME/bin/abrir-figcraft-claude.command"
+# Sem -n: se o FigCraft ja estiver aberto, so traz ele para a frente (nunca um segundo app).
+printf '#!/bin/bash\nopen -a "%s" --args --control %s\n' "$APP" "$PORT" > "$HOME/bin/abrir-figcraft-claude.command"
 chmod +x "$HOME/bin/abrir-figcraft-claude.command"
 
 echo "== MCP no app do Claude"
@@ -99,7 +116,7 @@ if cfg.get("mcpServers", {}).get("figcraft") != want:
     print("config do Claude atualizada (reinicie o app do Claude)")
 PY
 
-echo "== verificacao automatica (login e a cada 6 h)"
+echo "== verificacao automatica (toda segunda-feira as 10h)"
 PL="$HOME/Library/LaunchAgents/com.habittart.figcraft-update.plist"
 mkdir -p "$(dirname "$PL")"
 cat > "$PL" <<PL
@@ -108,8 +125,7 @@ cat > "$PL" <<PL
 <plist version="1.0"><dict>
   <key>Label</key><string>com.habittart.figcraft-update</string>
   <key>ProgramArguments</key><array><string>/bin/bash</string><string>$STATE/atualizar-figcraft.command</string><string>--check</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>StartInterval</key><integer>21600</integer>
+  <key>StartCalendarInterval</key><dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
 </dict></plist>
 PL
 /bin/launchctl bootout "gui/$(id -u)" "$PL" 2>/dev/null || true

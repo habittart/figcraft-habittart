@@ -1,7 +1,9 @@
 # Instala ou atualiza o FigCraft Habittart neste PC (Windows x64), sem precisar de administrador.
 # Baixa a versao mais recente de https://github.com/habittart/figcraft-habittart/releases, instala em
 # %LOCALAPPDATA%\FigCraft-Habittart, cria os atalhos, associa .figcraft e links figcraft://,
-# liga o MCP do FigCraft no app do Claude e agenda a verificacao automatica (a cada 6 h e no login).
+# liga o MCP do FigCraft no app do Claude e agenda a verificacao automatica (toda segunda-feira).
+# Toda vez tambem aplica as configuracoes gerais compartilhadas (settings/figcraft-settings.json do
+# repositorio) e o link do projeto online, para o FigCraft abrir direto nele.
 #
 #   Primeira vez (PowerShell):
 #   irm https://raw.githubusercontent.com/habittart/figcraft-habittart/main/scripts/windows/atualizar-figcraft.ps1 | iex
@@ -72,7 +74,16 @@ foreach ($lnk in $links) {
 }
 
 # .figcraft abre no FigCraft, e links figcraft:// (convites de edicao) tambem
-$open = "`"$exe`" --control $Port `"%1`""
+# The command line is exactly the one FigCraft registers for itself (it re-registers at every start
+# when the line differs), so the app and this script don't overwrite each other. The control channel
+# for the Claude MCP comes from FIGCRAFT_CONTROL_PORT instead, so every start has it (links,
+# double-clicked files, the Start menu).
+$open = "`"$exe`" `"%1`""
+if ([Environment]::GetEnvironmentVariable('FIGCRAFT_CONTROL_PORT', 'User') -ne "$Port") {
+    [Environment]::SetEnvironmentVariable('FIGCRAFT_CONTROL_PORT', "$Port", 'User')
+    Say "== canal de controle do Claude ligado em toda abertura do FigCraft (FIGCRAFT_CONTROL_PORT=$Port)"
+}
+$env:FIGCRAFT_CONTROL_PORT = "$Port"
 $classes = 'HKCU:\Software\Classes'
 function Set-Key($path, $value, $name = '(default)') {
     if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
@@ -86,6 +97,24 @@ Set-Key "$classes\figcraft" 'URL:FigCraft'
 Set-Key "$classes\figcraft" '' 'URL Protocol'
 Set-Key "$classes\figcraft\DefaultIcon" "$exe,0"
 Set-Key "$classes\figcraft\shell\open\command" $open
+
+# Configuracoes gerais iguais nos dois computadores, e o projeto online ao abrir o app
+$cfgDir = Join-Path $env:APPDATA 'FigCraft'
+New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+try {
+    $tmpSettings = Join-Path $cfgDir '.habittart-settings.new'
+    Invoke-WebRequest "https://raw.githubusercontent.com/$Repo/main/settings/figcraft-settings.json" -OutFile $tmpSettings -UseBasicParsing
+    Move-Item $tmpSettings (Join-Path $cfgDir 'habittart-settings.json') -Force
+} catch { Say "== configuracoes compartilhadas: sem rede agora ($($_.Exception.Message))" }
+foreach ($f in @((Join-Path $Dir 'link-edicao-PRIVADO.txt'), (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'figcraft-oracle\link-edicao-PRIVADO.txt'))) {
+    if (Test-Path $f) {
+        $m = Select-String -Path $f -Pattern 'figcraft://join\?\S+' | Select-Object -First 1
+        if ($m) {
+            [IO.File]::WriteAllText((Join-Path $cfgDir 'habittart-autojoin.txt'), $m.Matches[0].Value + "`n")
+            break
+        }
+    }
+}
 
 # MCP do FigCraft no app do Claude (instalacao normal e versao da Microsoft Store)
 $mcp = Join-Path $Dir 'figcraft-mcp.exe'
@@ -113,14 +142,13 @@ foreach ($d in $cfgDirs) {
     }
 }
 
-# Verificacao automatica: no login e a cada 6 horas, escondida
+# Verificacao automatica: toda segunda-feira as 10h (ou assim que o PC ligar, se estava desligado), escondida
 $self = Join-Path $Dir 'atualizar-figcraft.ps1'
 if (Test-Path $self) {
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$self`" -Quiet"
-    $t1 = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $t2 = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Hours 6)
+    $t1 = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At '10:00'
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-    Register-ScheduledTask -TaskName 'FigCraft Habittart - atualizar' -Action $action -Trigger @($t1, $t2) -Settings $settings -Description 'Mantem o FigCraft com as correcoes Habittart atualizado' -Force | Out-Null
+    Register-ScheduledTask -TaskName 'FigCraft Habittart - atualizar' -Action $action -Trigger $t1 -Settings $settings -Description 'Mantem o FigCraft com as correcoes Habittart atualizado' -Force | Out-Null
 }
 
 if ($updated) { Say "== PRONTO: FigCraft $tag instalado em $Dir" }
