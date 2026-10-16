@@ -47,8 +47,12 @@ CUR=$(cat "$STATE/installed.txt" 2>/dev/null || true)
 # The corrected executable must run inside the official bundle of the same version (resources,
 # Info.plist): if the FigCraft.app here is another version, the official one of $UP is reinstalled.
 APPVER=$(/usr/bin/defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)
+# Ours: the executable installed last time (its SHA-256), whatever corrections the community has
+# taken over since (older installs: the colour-matching marker).
 PATCHED=0
-[ -f "$EXE" ] && grep -q "colour matching: tagged" "$EXE" && PATCHED=1
+SUM=$( [ -f "$EXE" ] && /usr/bin/shasum -a 256 "$EXE" | cut -c1-64 || true)
+if [ -n "$SUM" ] && [ "$SUM" = "$(cat "$STATE/installed.sha" 2>/dev/null)" ]; then PATCHED=1
+elif [ -f "$EXE" ] && grep -q "colour matching: tagged" "$EXE"; then PATCHED=1; echo "$SUM" > "$STATE/installed.sha"; fi
 if [ "$TAG" = "$CUR" ] && [ "$PATCHED" = 1 ] && [ "$APPVER" = "${UP#v}" ] && [ -x "$HOME/bin/figcraft-cli-bin" ]; then
   echo "FigCraft ja esta na versao mais recente ($TAG)"; exit 0
 fi
@@ -132,6 +136,7 @@ PL
 /bin/launchctl bootstrap "gui/$(id -u)" "$PL" 2>/dev/null || /bin/launchctl load "$PL" 2>/dev/null || true
 
 echo "$TAG" > "$STATE/installed.txt"
+/usr/bin/shasum -a 256 "$EXE" | cut -c1-64 > "$STATE/installed.sha"
 rm -rf "$TMP"
 echo "== PRONTO: FigCraft $TAG (reabra o FigCraft para usar a versao nova)"
 /usr/bin/osascript -e "display notification \"FigCraft $TAG instalado\" with title \"FigCraft\"" || true

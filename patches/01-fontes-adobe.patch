@@ -1,0 +1,63 @@
+Habittart: fontes do Adobe Fonts no macOS e no Windows
+Comunidade-ja-tem: livetype
+Onde: crates/text/src
+
+diff --git a/crates/text/src/fontdb.rs b/crates/text/src/fontdb.rs
+index 2c584eb..f2ad739 100644
+--- a/crates/text/src/fontdb.rs
++++ b/crates/text/src/fontdb.rs
+@@ -655,7 +655,12 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
+         v.push("/System/Library/Fonts".into());
+         v.push("/Library/Fonts".into());
+         if let Some(h) = std::env::var_os("HOME") {
+-            v.push(std::path::PathBuf::from(h).join("Library/Fonts"));
++            let h = std::path::PathBuf::from(h);
++            v.push(h.join("Library/Fonts"));
++            // Adobe Fonts activated through Creative Cloud: macOS registers them with Core Text
++            // from this hidden folder (files like `.5560.otf`), so other apps (Figma included) see
++            // them although they are not in a Fonts folder.
++            v.push(h.join("Library/Application Support/Adobe/CoreSync/plugins/livetype/.r"));
+         }
+     }
+     #[cfg(target_os = "windows")]
+@@ -665,6 +670,10 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
+         if let Some(l) = std::env::var_os("LOCALAPPDATA") {
+             v.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
+         }
++        // Adobe Fonts activated through Creative Cloud (see the macOS note above).
++        if let Some(a) = std::env::var_os("APPDATA") {
++            v.push(std::path::PathBuf::from(a).join("Adobe\\CoreSync\\plugins\\livetype\\r"));
++        }
+     }
+     #[cfg(all(unix, not(target_os = "macos")))]
+     {
+@@ -696,7 +705,7 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
+             continue;
+         }
+         let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+-        if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") {
++        if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") && !(in_adobe_fonts(&path) && looks_like_font(&path)) {
+             continue;
+         }
+         // Skip very large files (colour emoji); they are not outline fonts we can draw anyway.
+@@ -707,6 +716,20 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
+     }
+ }
+ 
++/// Adobe Fonts keeps its activated fonts in a hidden `livetype` folder, without a font extension on
++/// Windows (`.5560.otf` on macOS).
++fn in_adobe_fonts(path: &std::path::Path) -> bool {
++    path.components().any(|c| c.as_os_str() == "livetype")
++}
++
++/// An OpenType, TrueType or collection file, by its first four bytes.
++fn looks_like_font(path: &std::path::Path) -> bool {
++    use std::io::Read;
++    let mut magic = [0u8; 4];
++    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok()
++        && matches!(&magic, b"OTTO" | b"ttcf" | b"true" | [0, 1, 0, 0])
++}
++
+ /// The parts of a font file the scan reads: headers, table directories and `name` tables, at their
+ /// offsets in a zeroed buffer of the file's length (reading whole files was most of the scan).
+ fn index_bytes(path: &std::path::Path, len: usize) -> Option<Vec<u8>> {

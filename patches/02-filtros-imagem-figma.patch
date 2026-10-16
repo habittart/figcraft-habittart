@@ -1,0 +1,36 @@
+Habittart: filtros de imagem importados do Figma (saturacao, exposicao, contraste...)
+Comunidade-ja-tem: paintFilter
+Onde: crates/format/src
+
+diff --git a/crates/format/src/fig/map.rs b/crates/format/src/fig/map.rs
+index 787ca6d..e397d62 100644
+--- a/crates/format/src/fig/map.rs
++++ b/crates/format/src/fig/map.rs
+@@ -1456,6 +1456,27 @@ fn paint(p: &Kv) -> Option<Value> {
+             if let Some(r) = num(p, "rotation") {
+                 o.insert("rotation".into(), json!(r));
+             }
++            // Image adjustments. The .fig `paintFilter` calls Figma's Saturation slider `vibrance`;
++            // the REST import below reads the REST names.
++            if let Some(f) = p.get("paintFilter") {
++                let mut filters = Obj::new();
++                for (fig, rest) in [
++                    ("exposure", "exposure"),
++                    ("contrast", "contrast"),
++                    ("vibrance", "saturation"),
++                    ("temperature", "temperature"),
++                    ("tint", "tint"),
++                    ("highlights", "highlights"),
++                    ("shadows", "shadows"),
++                ] {
++                    if let Some(x) = num(f, fig).filter(|x| *x != 0.0) {
++                        filters.insert(rest.into(), json!(x));
++                    }
++                }
++                if !filters.is_empty() {
++                    o.insert("filters".into(), Value::Object(filters));
++                }
++            }
+         }
+         _ => {}
+     }

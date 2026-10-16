@@ -1,149 +1,7 @@
-diff --git a/apps/figcraft/Cargo.toml b/apps/figcraft/Cargo.toml
-index b64b68d..010f80d 100644
---- a/apps/figcraft/Cargo.toml
-+++ b/apps/figcraft/Cargo.toml
-@@ -7,8 +7,21 @@ publish = false
- description = "FigCraft desktop app"
- default-run = "figcraft"
- 
--[lints]
--workspace = true
-+# The workspace forbids unsafe code; the app needs it in one place (color_match.rs, macOS
-+# colour matching through Core Animation), so it denies it here and allows that module only.
-+[lints.rust]
-+unsafe_code = "deny"
-+
-+[lints.clippy]
-+dbg_macro = "warn"
-+needless_range_loop = "allow"
-+chunks_exact_to_as_chunks = "allow"
-+unwrap_used = "deny"
-+expect_used = "deny"
-+panic = "deny"
-+todo = "deny"
-+unimplemented = "deny"
-+unreachable = "deny"
- 
- [dependencies]
- figcraft-engine = { workspace = true }
-@@ -34,5 +47,8 @@ windows = { version = "0.62", default-features = false, features = ["UI_ViewMana
- [dev-dependencies]
- wat = { workspace = true }
- 
-+[target.'cfg(target_os = "macos")'.dependencies]
-+objc2 = "0.6"
-+
- [build-dependencies]
- winresource = "0.1"
-diff --git a/apps/figcraft/src/color_match.rs b/apps/figcraft/src/color_match.rs
-new file mode 100644
-index 0000000..81804ae
---- /dev/null
-+++ b/apps/figcraft/src/color_match.rs
-@@ -0,0 +1,103 @@
-+//! macOS colour matching for the app windows.
-+//!
-+//! Everything FigCraft draws (the UI and the canvas, which `render_worker::screen_image` converts
-+//! to sRGB, Display P3 documents included) is sRGB-encoded. wgpu leaves the `CAMetalLayer`'s
-+//! `colorspace` unset, and an untagged layer is not colour matched: macOS shows its values in the
-+//! display's own colour space, so on a wide-gamut (Display P3) screen every colour looks more
-+//! saturated than in colour-managed apps such as Figma, Safari or Preview. Tagging the layers as
-+//! sRGB lets the window server convert them to the display, so `#D85A30` looks the same here as
-+//! everywhere else.
-+
-+#![allow(unsafe_code)]
-+
-+use std::ffi::c_void;
-+
-+use objc2::encode::{Encode, Encoding};
-+use objc2::msg_send;
-+use objc2::runtime::{AnyClass, AnyObject};
-+
-+/// `CGColorSpaceRef`.
-+#[repr(transparent)]
-+#[derive(Clone, Copy)]
-+struct ColorSpaceRef(*const c_void);
-+
-+// SAFETY: a `CGColorSpaceRef` is a pointer to an opaque CoreFoundation struct.
-+unsafe impl Encode for ColorSpaceRef {
-+    const ENCODING: Encoding = Encoding::Pointer(&Encoding::Struct("CGColorSpace", &[]));
-+}
-+
-+#[link(name = "CoreGraphics", kind = "framework")]
-+unsafe extern "C" {
-+    static kCGColorSpaceSRGB: *const c_void;
-+    fn CGColorSpaceCreateWithName(name: *const c_void) -> *const c_void;
-+}
-+
-+fn srgb() -> ColorSpaceRef {
-+    use std::sync::OnceLock;
-+    static SRGB: OnceLock<usize> = OnceLock::new();
-+    // Created once and kept for the life of the app (layers retain it too).
-+    let p = *SRGB.get_or_init(|| unsafe { CGColorSpaceCreateWithName(kCGColorSpaceSRGB) } as usize);
-+    ColorSpaceRef(p as *const c_void)
-+}
-+
-+/// Tags every `CAMetalLayer` of the app's windows that has no colour space yet as sRGB.
-+/// Cheap (a few Objective-C calls per window); call it from the main thread every frame.
-+pub fn tag_windows() {
-+    // SAFETY: plain AppKit / Core Animation messages on the main thread (eframe's `logic`),
-+    // each guarded against nil.
-+    unsafe {
-+        let (Some(app_cls), Some(metal_cls)) = (AnyClass::get(c"NSApplication"), AnyClass::get(c"CAMetalLayer")) else {
-+            return;
-+        };
-+        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
-+        if app.is_null() {
-+            return;
-+        }
-+        let windows: *mut AnyObject = msg_send![app, windows];
-+        if windows.is_null() {
-+            return;
-+        }
-+        let space = srgb();
-+        if space.0.is_null() {
-+            return;
-+        }
-+        let n: usize = msg_send![windows, count];
-+        for i in 0..n {
-+            let window: *mut AnyObject = msg_send![windows, objectAtIndex: i];
-+            if window.is_null() {
-+                continue;
-+            }
-+            let view: *mut AnyObject = msg_send![window, contentView];
-+            if view.is_null() {
-+                continue;
-+            }
-+            let layer: *mut AnyObject = msg_send![view, layer];
-+            tag_layer(layer, metal_cls, space, 0);
-+        }
-+    }
-+}
-+
-+unsafe fn tag_layer(layer: *mut AnyObject, metal_cls: &AnyClass, space: ColorSpaceRef, depth: u32) {
-+    if layer.is_null() || depth > 4 {
-+        return;
-+    }
-+    unsafe {
-+        let is_metal: bool = msg_send![layer, isKindOfClass: metal_cls];
-+        if is_metal {
-+            let current: ColorSpaceRef = msg_send![layer, colorspace];
-+            if current.0.is_null() {
-+                let _: () = msg_send![layer, setColorspace: space];
-+                log::info!("colour matching: tagged a window's Metal layer as sRGB");
-+            }
-+        }
-+        let subs: *mut AnyObject = msg_send![layer, sublayers];
-+        if subs.is_null() {
-+            return;
-+        }
-+        let n: usize = msg_send![subs, count];
-+        for i in 0..n {
-+            let sub: *mut AnyObject = msg_send![subs, objectAtIndex: i];
-+            tag_layer(sub, metal_cls, space, depth + 1);
-+        }
-+    }
-+}
+Habittart: um app so, abre no projeto online, configuracoes compartilhadas, sem abas duplicadas
+Comunidade-ja-tem: single.instance|SingleInstance|already running
+Onde: apps/figcraft/src
+
 diff --git a/apps/figcraft/src/habittart.rs b/apps/figcraft/src/habittart.rs
 new file mode 100644
 index 0000000..ccb82e8
@@ -272,15 +130,10 @@ index 0000000..ccb82e8
 +    changed
 +}
 diff --git a/apps/figcraft/src/main.rs b/apps/figcraft/src/main.rs
-index 0332f7d..16faf3c 100644
+index 6aaae15..16faf3c 100644
 --- a/apps/figcraft/src/main.rs
 +++ b/apps/figcraft/src/main.rs
-@@ -10,9 +10,12 @@
- #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
- 
- mod args;
-+#[cfg(target_os = "macos")]
-+mod color_match;
+@@ -15,6 +15,7 @@ mod color_match;
  mod control_server;
  mod gamepad;
  mod graphics;
@@ -288,32 +141,7 @@ index 0332f7d..16faf3c 100644
  mod recovery;
  mod services;
  
-@@ -47,14 +50,24 @@ struct App {
- 
- impl eframe::App for App {
-     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-+        // Colour-match the windows on wide-gamut screens (see color_match.rs).
-+        #[cfg(target_os = "macos")]
-+        color_match::tag_windows();
-         {
-             let mut slot = self.ctx_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-             if slot.is_none() {
-                 *slot = Some(ctx.clone());
-             }
-         }
-+        // eframe skips the UI pass of a window that is covered by other windows or minimized, and
-+        // control requests (the MCP server, `--control`) normally run in that pass: answer them
-+        // here then, so an agent can keep working while FigCraft is in the background.
-+        let hidden = !ctx.input(|i| i.viewport().visible().unwrap_or(true));
-         let title = with_app(|fig| {
-             control_server::drain_queue(&self.queue, &mut fig.control_queue);
-+            if hidden && !fig.control_queue.is_empty() {
-+                figcraft_ui_egui::windows::guard(fig, ctx, |fig| figcraft_ui_egui::control::drain(fig, ctx));
-+            }
-             // Closing the window asks about unsaved changes (and keeps the app running while other
-             // windows are open).
-             figcraft_ui_egui::windows::on_close_request(fig, ctx);
-@@ -107,6 +120,14 @@ fn main() -> eframe::Result {
+@@ -119,6 +120,14 @@ fn main() -> eframe::Result {
      }
      let args = args::parse(&args);
      let port = args.control.or_else(|| std::env::var("FIGCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok()));
@@ -328,7 +156,7 @@ index 0332f7d..16faf3c 100644
      // System fonts: index them in the background, then wake the UI (an idle window draws no frames)
      // to lay text out again with them.
      let ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
-@@ -138,6 +159,14 @@ fn main() -> eframe::Result {
+@@ -150,6 +159,14 @@ fn main() -> eframe::Result {
      if let Some(prefs) = svc.prefs.clone() {
          session.prefs = prefs;
      }
@@ -343,7 +171,7 @@ index 0332f7d..16faf3c 100644
      let recovered = recovery_root.as_deref().map(|r| recovery::recover_all(r, &mut session)).unwrap_or_default();
      let mut copies = recovery_root.as_deref().and_then(recovery::Recovery::start);
      // Copies of online files stay until their files arrive from their servers.
-@@ -153,15 +182,21 @@ fn main() -> eframe::Result {
+@@ -165,15 +182,21 @@ fn main() -> eframe::Result {
      session.invite_links_startup();
      // A first run (no settings kept yet, nothing to open) starts on the home screen, with its
      // tips and templates; later runs start in a new file.
@@ -421,94 +249,3 @@ index 09c5831..2954de5 100644
  fn leave(s: &mut Session, _: &Value) -> Result<Value> {
      let ended = s.live.shown(s.tab()).and_then(|id| s.live.end(id));
      if ended.as_ref().is_some_and(|l| l.syncing() && l.role() == Some(Role::Guest)) {
-diff --git a/crates/format/src/fig/map.rs b/crates/format/src/fig/map.rs
-index 787ca6d..e397d62 100644
---- a/crates/format/src/fig/map.rs
-+++ b/crates/format/src/fig/map.rs
-@@ -1456,6 +1456,27 @@ fn paint(p: &Kv) -> Option<Value> {
-             if let Some(r) = num(p, "rotation") {
-                 o.insert("rotation".into(), json!(r));
-             }
-+            // Image adjustments. The .fig `paintFilter` calls Figma's Saturation slider `vibrance`;
-+            // the REST import below reads the REST names.
-+            if let Some(f) = p.get("paintFilter") {
-+                let mut filters = Obj::new();
-+                for (fig, rest) in [
-+                    ("exposure", "exposure"),
-+                    ("contrast", "contrast"),
-+                    ("vibrance", "saturation"),
-+                    ("temperature", "temperature"),
-+                    ("tint", "tint"),
-+                    ("highlights", "highlights"),
-+                    ("shadows", "shadows"),
-+                ] {
-+                    if let Some(x) = num(f, fig).filter(|x| *x != 0.0) {
-+                        filters.insert(rest.into(), json!(x));
-+                    }
-+                }
-+                if !filters.is_empty() {
-+                    o.insert("filters".into(), Value::Object(filters));
-+                }
-+            }
-         }
-         _ => {}
-     }
-diff --git a/crates/text/src/fontdb.rs b/crates/text/src/fontdb.rs
-index 2c584eb..f2ad739 100644
---- a/crates/text/src/fontdb.rs
-+++ b/crates/text/src/fontdb.rs
-@@ -655,7 +655,12 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
-         v.push("/System/Library/Fonts".into());
-         v.push("/Library/Fonts".into());
-         if let Some(h) = std::env::var_os("HOME") {
--            v.push(std::path::PathBuf::from(h).join("Library/Fonts"));
-+            let h = std::path::PathBuf::from(h);
-+            v.push(h.join("Library/Fonts"));
-+            // Adobe Fonts activated through Creative Cloud: macOS registers them with Core Text
-+            // from this hidden folder (files like `.5560.otf`), so other apps (Figma included) see
-+            // them although they are not in a Fonts folder.
-+            v.push(h.join("Library/Application Support/Adobe/CoreSync/plugins/livetype/.r"));
-         }
-     }
-     #[cfg(target_os = "windows")]
-@@ -665,6 +670,10 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
-         if let Some(l) = std::env::var_os("LOCALAPPDATA") {
-             v.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
-         }
-+        // Adobe Fonts activated through Creative Cloud (see the macOS note above).
-+        if let Some(a) = std::env::var_os("APPDATA") {
-+            v.push(std::path::PathBuf::from(a).join("Adobe\\CoreSync\\plugins\\livetype\\r"));
-+        }
-     }
-     #[cfg(all(unix, not(target_os = "macos")))]
-     {
-@@ -696,7 +705,7 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
-             continue;
-         }
-         let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
--        if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") {
-+        if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") && !(in_adobe_fonts(&path) && looks_like_font(&path)) {
-             continue;
-         }
-         // Skip very large files (colour emoji); they are not outline fonts we can draw anyway.
-@@ -707,6 +716,20 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
-     }
- }
- 
-+/// Adobe Fonts keeps its activated fonts in a hidden `livetype` folder, without a font extension on
-+/// Windows (`.5560.otf` on macOS).
-+fn in_adobe_fonts(path: &std::path::Path) -> bool {
-+    path.components().any(|c| c.as_os_str() == "livetype")
-+}
-+
-+/// An OpenType, TrueType or collection file, by its first four bytes.
-+fn looks_like_font(path: &std::path::Path) -> bool {
-+    use std::io::Read;
-+    let mut magic = [0u8; 4];
-+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok()
-+        && matches!(&magic, b"OTTO" | b"ttcf" | b"true" | [0, 1, 0, 0])
-+}
-+
- /// The parts of a font file the scan reads: headers, table directories and `name` tables, at their
- /// offsets in a zeroed buffer of the file's length (reading whole files was most of the scan).
- fn index_bytes(path: &std::path::Path, len: usize) -> Option<Vec<u8>> {

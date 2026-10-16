@@ -1,0 +1,173 @@
+Habittart: cores iguais ao Figma no macOS (gerenciamento de cor)
+Comunidade-ja-tem: setColorspace|kCGColorSpaceSRGB
+Onde: apps/figcraft/src crates/ui-egui/src
+
+diff --git a/apps/figcraft/Cargo.toml b/apps/figcraft/Cargo.toml
+index b64b68d..010f80d 100644
+--- a/apps/figcraft/Cargo.toml
++++ b/apps/figcraft/Cargo.toml
+@@ -7,8 +7,21 @@ publish = false
+ description = "FigCraft desktop app"
+ default-run = "figcraft"
+ 
+-[lints]
+-workspace = true
++# The workspace forbids unsafe code; the app needs it in one place (color_match.rs, macOS
++# colour matching through Core Animation), so it denies it here and allows that module only.
++[lints.rust]
++unsafe_code = "deny"
++
++[lints.clippy]
++dbg_macro = "warn"
++needless_range_loop = "allow"
++chunks_exact_to_as_chunks = "allow"
++unwrap_used = "deny"
++expect_used = "deny"
++panic = "deny"
++todo = "deny"
++unimplemented = "deny"
++unreachable = "deny"
+ 
+ [dependencies]
+ figcraft-engine = { workspace = true }
+@@ -34,5 +47,8 @@ windows = { version = "0.62", default-features = false, features = ["UI_ViewMana
+ [dev-dependencies]
+ wat = { workspace = true }
+ 
++[target.'cfg(target_os = "macos")'.dependencies]
++objc2 = "0.6"
++
+ [build-dependencies]
+ winresource = "0.1"
+diff --git a/apps/figcraft/src/color_match.rs b/apps/figcraft/src/color_match.rs
+new file mode 100644
+index 0000000..81804ae
+--- /dev/null
++++ b/apps/figcraft/src/color_match.rs
+@@ -0,0 +1,103 @@
++//! macOS colour matching for the app windows.
++//!
++//! Everything FigCraft draws (the UI and the canvas, which `render_worker::screen_image` converts
++//! to sRGB, Display P3 documents included) is sRGB-encoded. wgpu leaves the `CAMetalLayer`'s
++//! `colorspace` unset, and an untagged layer is not colour matched: macOS shows its values in the
++//! display's own colour space, so on a wide-gamut (Display P3) screen every colour looks more
++//! saturated than in colour-managed apps such as Figma, Safari or Preview. Tagging the layers as
++//! sRGB lets the window server convert them to the display, so `#D85A30` looks the same here as
++//! everywhere else.
++
++#![allow(unsafe_code)]
++
++use std::ffi::c_void;
++
++use objc2::encode::{Encode, Encoding};
++use objc2::msg_send;
++use objc2::runtime::{AnyClass, AnyObject};
++
++/// `CGColorSpaceRef`.
++#[repr(transparent)]
++#[derive(Clone, Copy)]
++struct ColorSpaceRef(*const c_void);
++
++// SAFETY: a `CGColorSpaceRef` is a pointer to an opaque CoreFoundation struct.
++unsafe impl Encode for ColorSpaceRef {
++    const ENCODING: Encoding = Encoding::Pointer(&Encoding::Struct("CGColorSpace", &[]));
++}
++
++#[link(name = "CoreGraphics", kind = "framework")]
++unsafe extern "C" {
++    static kCGColorSpaceSRGB: *const c_void;
++    fn CGColorSpaceCreateWithName(name: *const c_void) -> *const c_void;
++}
++
++fn srgb() -> ColorSpaceRef {
++    use std::sync::OnceLock;
++    static SRGB: OnceLock<usize> = OnceLock::new();
++    // Created once and kept for the life of the app (layers retain it too).
++    let p = *SRGB.get_or_init(|| unsafe { CGColorSpaceCreateWithName(kCGColorSpaceSRGB) } as usize);
++    ColorSpaceRef(p as *const c_void)
++}
++
++/// Tags every `CAMetalLayer` of the app's windows that has no colour space yet as sRGB.
++/// Cheap (a few Objective-C calls per window); call it from the main thread every frame.
++pub fn tag_windows() {
++    // SAFETY: plain AppKit / Core Animation messages on the main thread (eframe's `logic`),
++    // each guarded against nil.
++    unsafe {
++        let (Some(app_cls), Some(metal_cls)) = (AnyClass::get(c"NSApplication"), AnyClass::get(c"CAMetalLayer")) else {
++            return;
++        };
++        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
++        if app.is_null() {
++            return;
++        }
++        let windows: *mut AnyObject = msg_send![app, windows];
++        if windows.is_null() {
++            return;
++        }
++        let space = srgb();
++        if space.0.is_null() {
++            return;
++        }
++        let n: usize = msg_send![windows, count];
++        for i in 0..n {
++            let window: *mut AnyObject = msg_send![windows, objectAtIndex: i];
++            if window.is_null() {
++                continue;
++            }
++            let view: *mut AnyObject = msg_send![window, contentView];
++            if view.is_null() {
++                continue;
++            }
++            let layer: *mut AnyObject = msg_send![view, layer];
++            tag_layer(layer, metal_cls, space, 0);
++        }
++    }
++}
++
++unsafe fn tag_layer(layer: *mut AnyObject, metal_cls: &AnyClass, space: ColorSpaceRef, depth: u32) {
++    if layer.is_null() || depth > 4 {
++        return;
++    }
++    unsafe {
++        let is_metal: bool = msg_send![layer, isKindOfClass: metal_cls];
++        if is_metal {
++            let current: ColorSpaceRef = msg_send![layer, colorspace];
++            if current.0.is_null() {
++                let _: () = msg_send![layer, setColorspace: space];
++                log::info!("colour matching: tagged a window's Metal layer as sRGB");
++            }
++        }
++        let subs: *mut AnyObject = msg_send![layer, sublayers];
++        if subs.is_null() {
++            return;
++        }
++        let n: usize = msg_send![subs, count];
++        for i in 0..n {
++            let sub: *mut AnyObject = msg_send![subs, objectAtIndex: i];
++            tag_layer(sub, metal_cls, space, depth + 1);
++        }
++    }
++}
+diff --git a/apps/figcraft/src/main.rs b/apps/figcraft/src/main.rs
+index 0332f7d..bf140a7 100644
+--- a/apps/figcraft/src/main.rs
++++ b/apps/figcraft/src/main.rs
+@@ -10,6 +10,8 @@
+ #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+ 
+ mod args;
++#[cfg(target_os = "macos")]
++mod color_match;
+ mod control_server;
+ mod gamepad;
+ mod graphics;
+@@ -47,6 +49,9 @@ struct App {
+ 
+ impl eframe::App for App {
+     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
++        // Colour-match the windows on wide-gamut screens (see color_match.rs).
++        #[cfg(target_os = "macos")]
++        color_match::tag_windows();
+         {
+             let mut slot = self.ctx_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+             if slot.is_none() {

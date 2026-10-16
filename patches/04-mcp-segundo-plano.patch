@@ -1,0 +1,24 @@
+Habittart: MCP responde com o FigCraft em segundo plano
+Comunidade-ja-tem: control::drain
+Onde: apps/figcraft/src/main.rs
+
+diff --git a/apps/figcraft/src/main.rs b/apps/figcraft/src/main.rs
+index bf140a7..6aaae15 100644
+--- a/apps/figcraft/src/main.rs
++++ b/apps/figcraft/src/main.rs
+@@ -58,8 +58,15 @@ impl eframe::App for App {
+                 *slot = Some(ctx.clone());
+             }
+         }
++        // eframe skips the UI pass of a window that is covered by other windows or minimized, and
++        // control requests (the MCP server, `--control`) normally run in that pass: answer them
++        // here then, so an agent can keep working while FigCraft is in the background.
++        let hidden = !ctx.input(|i| i.viewport().visible().unwrap_or(true));
+         let title = with_app(|fig| {
+             control_server::drain_queue(&self.queue, &mut fig.control_queue);
++            if hidden && !fig.control_queue.is_empty() {
++                figcraft_ui_egui::windows::guard(fig, ctx, |fig| figcraft_ui_egui::control::drain(fig, ctx));
++            }
+             // Closing the window asks about unsaved changes (and keeps the app running while other
+             // windows are open).
+             figcraft_ui_egui::windows::on_close_request(fig, ctx);

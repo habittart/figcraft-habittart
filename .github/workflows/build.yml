@@ -1,4 +1,4 @@
-# Builds FigCraft with the Habittart patches (patches/*.patch) for macOS (Apple Silicon) and
+# Builds FigCraft with the Habittart patches (patches/*.patch, one per correction) for macOS (Apple Silicon) and
 # Windows (x64), plus the resilient MCP proxy (proxy/), every time storytold/figcraft releases a
 # new version or the patches change. Each build is published as a release of this repository;
 # the updaters in scripts/ install the latest one on each computer.
@@ -85,22 +85,36 @@ jobs:
           repository: storytold/craft-fonts
           ref: ${{ needs.check.outputs.fonts }}
           path: craft-fonts
+      # Each patch says how to recognise its feature upstream ("Comunidade-ja-tem"). When the
+      # community already has it, or has changed that code so the patch no longer fits, its version
+      # wins and the patch is left out (listed in correcoes-habittart.txt and the release notes).
       - name: Apply the Habittart patches
         shell: bash
         working-directory: src
         run: |
           git config user.name ci; git config user.email ci@localhost
+          : > ../aplicadas.txt; : > ../puladas.txt
           for p in ../meta/patches/*.patch; do
-            echo "== applying $p"
-            if git apply --whitespace=nowarn "$p"; then echo "   applied"; continue; fi
-            if git apply --3way --whitespace=nowarn "$p" && ! git diff --name-only --diff-filter=U | grep -q .; then echo "   applied (3-way)"; continue; fi
-            git checkout -- . 2>/dev/null; git reset -q --hard; git clean -fdq
-            for q in ../meta/patches/*.patch; do [ "$q" = "$p" ] && break; git apply --whitespace=nowarn "$q" || git apply --3way --whitespace=nowarn "$q"; done
-            if patch -p1 --forward --fuzz=3 --no-backup-if-mismatch -i "$p"; then echo "   applied (fuzzy)"; continue; fi
-            echo "::error::$p no longer applies to FigCraft ${{ needs.check.outputs.upstream }}: the patch needs updating. The computers keep the last good version."
-            exit 1
+            n=$(basename "$p" .patch)
+            desc=$(sed -n 's/^Habittart: //p' "$p" | head -1)
+            re=$(sed -n 's/^Comunidade-ja-tem: //p' "$p" | head -1)
+            where=$(sed -n 's/^Onde: //p' "$p" | head -1)
+            if [ -n "$re" ] && git grep -q -E "$re" -- $where; then
+              echo "== $n: a comunidade ja tem isso, fica a versao dela"
+              echo "- $desc: a comunidade ja tem, ficou a versao dela" >> ../puladas.txt; continue
+            fi
+            if git apply --whitespace=nowarn "$p" || { git apply --3way --whitespace=nowarn "$p" && ! git diff --name-only --diff-filter=U | grep -q .; }; then
+              git add -A; git commit -qm "$n"; echo "- $desc" >> ../aplicadas.txt; echo "== $n: aplicada"; continue
+            fi
+            git reset -q --hard; git clean -fdq
+            if patch -p1 --forward --fuzz=2 --no-backup-if-mismatch -i "$p" && [ -z "$(find . -name '*.rej' -not -path './target/*')" ]; then
+              git add -A; git commit -qm "$n (fuzzy)"; echo "- $desc" >> ../aplicadas.txt; echo "== $n: aplicada (fuzzy)"; continue
+            fi
+            git reset -q --hard; git clean -fdq
+            echo "::warning::$n: a comunidade mudou esse codigo; fica a versao dela"
+            echo "- $desc: a comunidade mudou esse codigo, ficou a versao dela" >> ../puladas.txt
           done
-          git status --short
+          git log --oneline -8
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -132,6 +146,7 @@ jobs:
           cp src/LICENSE-* src/NOTICE out/
           [ -d craft-fonts/fonts ] && for l in craft-fonts/fonts/*/OFL.txt; do cp "$l" "out/OFL-$(basename "$(dirname "$l")").txt"; done || true
           echo "${{ needs.check.outputs.release }}" > out/habittart-version.txt
+          { echo "Correcoes Habittart nesta versao:"; cat aplicadas.txt; if [ -s puladas.txt ]; then echo; echo "Deixadas de fora (a versao da comunidade vale):"; cat puladas.txt; fi; } > out/correcoes-habittart.txt
           cd out
           if [ "${{ matrix.exe }}" = ".exe" ]; then 7z a -tzip "../figcraft-habittart-${{ matrix.name }}.zip" . >/dev/null; else zip -qry "../figcraft-habittart-${{ matrix.name }}.zip" .; fi
       - uses: actions/upload-artifact@v4
@@ -156,7 +171,7 @@ jobs:
           gh release delete "$REL" -R "$GITHUB_REPOSITORY" -y --cleanup-tag 2>/dev/null || true
           gh release create "$REL" -R "$GITHUB_REPOSITORY" --latest \
             --title "FigCraft $UP (Habittart)" \
-            --notes "FigCraft $UP da storytold/figcraft com as correções Habittart: cores com gerenciamento de cor no macOS, fontes do Adobe Fonts (macOS e Windows), saturação de imagens importadas do Figma, comandos do MCP com o app em segundo plano, e o proxy MCP resiliente." \
+            --notes "$(printf 'FigCraft %s da storytold/figcraft, com o proxy MCP resiliente.\n\n' "$UP"; unzip -p dist/figcraft-habittart-windows-x64.zip correcoes-habittart.txt 2>/dev/null)" \
             dist/*.zip
           # Only the newest build stays: older ones (and their tags) go.
           gh release list -R "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' | while read -r t; do
