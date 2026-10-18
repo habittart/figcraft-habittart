@@ -130,7 +130,7 @@ index 0000000..ccb82e8
 +    changed
 +}
 diff --git a/apps/figcraft/src/main.rs b/apps/figcraft/src/main.rs
-index a11d14d..d03bc8f 100644
+index a11d14d..88693b0 100644
 --- a/apps/figcraft/src/main.rs
 +++ b/apps/figcraft/src/main.rs
 @@ -22,6 +22,7 @@ mod color_match;
@@ -182,13 +182,20 @@ index a11d14d..d03bc8f 100644
          let _ = session.execute("file.new", &json!({}));
      }
      // The interface language from the first frame on, and for the message when the window can't
-@@ -200,8 +217,14 @@ fn main() -> eframe::Result {
+@@ -200,8 +217,20 @@ fn main() -> eframe::Result {
      fig.automation_roots = roots;
      fig.ui.home = false;
      fig.note_recovered(recovered.copies);
 -    if let Some(link) = &args.join {
+-        figcraft_ui_egui::live::open_invite(&mut fig, link);
 +    if let Some(link) = &join {
-         figcraft_ui_egui::live::open_invite(&mut fig, link);
++        if args.join.is_some() {
++            // A link the system handed over: shown and confirmed (it may not be one you meant).
++            figcraft_ui_egui::live::open_invite(&mut fig, link);
++        } else if let Err(e) = fig.session.execute("collab.join", &json!({"link": link})) {
++            // Habittart: your own project link joins straight away.
++            log::warn!("habittart: joining the online project: {e}");
++        }
 +        // Habittart: no empty file next to it; the home screen shows the join until the
 +        // project's tab opens (and says why if the server can't be reached).
 +        if fig.session.docs.is_empty() {
