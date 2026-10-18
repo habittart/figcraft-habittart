@@ -43,7 +43,8 @@ jobs:
           PH=$(cat patches/*.patch proxy/*.go scripts/*/* .github/workflows/build.yml | sha256sum | cut -c1-8)
           REL="$UP-habittart-$PH"
           # The craft-fonts commit the official release embeds (Inter and the bundled fonts).
-          FONTS=$(curl -fsSL "https://raw.githubusercontent.com/storytold/figcraft/$UP/.github/workflows/release.yml" | sed -n 's/^ *CRAFT_FONTS_REF: *\([0-9a-f]\{40\}\).*/\1/p' | head -1)
+          # Older releases set it as env CRAFT_FONTS_REF, newer ones pass craft-fonts-ref to a shared workflow.
+          FONTS=$(curl -fsSL "https://raw.githubusercontent.com/storytold/figcraft/$UP/.github/workflows/release.yml" | sed -n 's/^ *\(CRAFT_FONTS_REF\|craft-fonts-ref\): *\([0-9a-f]\{40\}\).*/\2/p' | head -1)
           echo "upstream=$UP" >> "$GITHUB_OUTPUT"
           echo "release=$REL" >> "$GITHUB_OUTPUT"
           echo "fonts=$FONTS" >> "$GITHUB_OUTPUT"
