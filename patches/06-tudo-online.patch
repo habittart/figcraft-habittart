@@ -16,10 +16,10 @@ index 40e997f..00c9c72 100644
  egui = { workspace = true }
 diff --git a/apps/figcraft/src/habittart_sync.rs b/apps/figcraft/src/habittart_sync.rs
 new file mode 100644
-index 0000000..e071822
+index 0000000..c53795d
 --- /dev/null
 +++ b/apps/figcraft/src/habittart_sync.rs
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,320 @@
 +//! Habittart: every project online, on every computer, with nothing to do by hand.
 +//!
 +//! With the server's address and key (`wss://host/?key=…`) in `habittart-servidor.txt` in the
@@ -71,12 +71,14 @@ index 0000000..e071822
 +    /// Documents this run put online, by name, and when (seconds into the run).
 +    published: BTreeMap<String, u64>,
 +    passes: u64,
++    /// The home screen was put away once at start.
++    left_home: bool,
 +}
 +
 +fn run(dir: &Path, port: u16) {
 +    // Let the window open, recovered documents arrive and startup joins begin first.
 +    std::thread::sleep(Duration::from_secs(10));
-+    let mut st = State { known: None, joined: BTreeSet::new(), candidate: None, published: BTreeMap::new(), passes: 0 };
++    let mut st = State { known: None, joined: BTreeSet::new(), candidate: None, published: BTreeMap::new(), passes: 0, left_home: false };
 +    loop {
 +        if let Err(e) = pass(dir, port, &mut st) {
 +            log::info!("habittart sync: {e}");
@@ -196,9 +198,19 @@ index 0000000..e071822
 +    let ui = rpc(port, "ui.inspect", json!({}))?;
 +    let home = ui.get("home").and_then(Value::as_bool).unwrap_or(false);
 +    let status = ui.get("status").cloned().unwrap_or(Value::Null);
++    let documents = status.get("documents").and_then(Value::as_u64).unwrap_or(0);
++    // The start opened on the home screen while the projects arrived: once they are here and
++    // none is still connecting, show the project instead (only in the first minutes).
++    let connecting = peers.get("sessions").and_then(Value::as_array).is_some_and(|s| {
++        s.iter().any(|x| matches!(x.get("status").and_then(Value::as_str), Some("connecting" | "reconnecting")))
++    });
++    if home && documents > 0 && !connecting && st.passes < 9 && !st.left_home {
++        st.left_home = true;
++        let _ = rpc(port, "ui.set", json!({"home": false}));
++    }
 +    let name = status.get("document").and_then(Value::as_str).unwrap_or("").to_string();
 +    let from_disk = status.get("path").is_some_and(|p| !p.is_null());
-+    if !offline || home || name.is_empty() {
++    if !offline || name.is_empty() {
 +        st.candidate = None;
 +        return Ok(());
 +    }
