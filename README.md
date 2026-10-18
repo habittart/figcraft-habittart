@@ -12,6 +12,12 @@ nova do FigCraft ou quando as correções mudam.
   aparecer no FigCraft, no macOS e no Windows.
 - **Importação de `.fig`:** o ajuste de saturação das imagens do Figma (salvo como `vibrance`) é
   importado; fotos em preto e branco continuam em preto e branco.
+- **Um app só:** uma segunda abertura entrega arquivos e links ao FigCraft que já está aberto, e as
+  configurações gerais (`settings/`) valem nos dois computadores.
+- **Tudo online sozinho:** com o endereço do servidor e a chave (`habittart-servidor.txt` na pasta de
+  configurações, copiado pelo atualizador), o FigCraft abre ao iniciar todos os projetos do servidor,
+  abre os que aparecerem depois (feitos no outro computador) e publica cada documento novo que não
+  estiver online. A chave nunca vai para este repositório.
 - **MCP em segundo plano:** os comandos do canal de controle (MCP) funcionam com o FigCraft atrás
   de outras janelas ou minimizado.
 

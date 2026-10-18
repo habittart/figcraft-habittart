@@ -1,0 +1,351 @@
+Habittart: todo projeto online sozinho (abre os do servidor e publica os novos), no Mac e no Windows
+Comunidade-ja-tem: habittart-servidor
+Onde: apps/figcraft/src
+
+diff --git a/apps/figcraft/Cargo.toml b/apps/figcraft/Cargo.toml
+index 40e997f..00c9c72 100644
+--- a/apps/figcraft/Cargo.toml
++++ b/apps/figcraft/Cargo.toml
+@@ -27,6 +27,7 @@ unreachable = "deny"
+ figcraft-engine = { workspace = true }
+ figcraft-ui-egui = { workspace = true }
+ figcraft-collab-net = { workspace = true }
++figcraft-collab = { workspace = true }
+ figcraft-format = { workspace = true }
+ figcraft-text = { workspace = true }
+ egui = { workspace = true }
+diff --git a/apps/figcraft/src/habittart_sync.rs b/apps/figcraft/src/habittart_sync.rs
+new file mode 100644
+index 0000000..e071822
+--- /dev/null
++++ b/apps/figcraft/src/habittart_sync.rs
+@@ -0,0 +1,308 @@
++//! Habittart: every project online, on every computer, with nothing to do by hand.
++//!
++//! With the server's address and key (`wss://host/?key=…`) in `habittart-servidor.txt` in the
++//! settings folder (on Windows also one of the private places in [`server_files`]), a thread keeps this
++//! FigCraft and the server in step through the app's own control channel:
++//!
++//! * every file on the server is open here: all of them when the app starts, then each new one
++//!   (made on another computer) as it appears; a tab you close stays closed until the next start;
++//! * a document that isn't online and isn't empty (a new file you drew in, a `.figcraft` opened
++//!   from disk) goes to the server as a new file, unless it was opened from disk and the server
++//!   already has a file of that name (it is a copy of one that is online).
++//!
++//! The edit links it joins with are made once per computer and kept in `habittart-links.json`.
++//! Nothing secret is logged.
++
++use std::collections::{BTreeMap, BTreeSet};
++use std::io::{BufRead, BufReader, Write};
++use std::net::{SocketAddr, TcpStream};
++use std::path::{Path, PathBuf};
++use std::time::Duration;
++
++use figcraft_collab::message::{Access, Admin, AdminReply, FileInfo};
++use figcraft_collab_net::{Endpoint, Invite, NetLimits, manage};
++use serde_json::{Value, json};
++
++const SERVER_FILE: &str = "habittart-servidor.txt";
++const LINKS_FILE: &str = "habittart-links.json";
++/// How often the app and the server are compared.
++const EVERY: Duration = Duration::from_secs(20);
++/// Files joined in one pass at most (the rest follow in the next ones).
++const JOINS_PER_PASS: usize = 8;
++
++/// Start keeping this app and the server in step (a no-op without a settings folder).
++pub fn start(dir: Option<PathBuf>, port: u16) {
++    let Some(dir) = dir else { return };
++    let spawned = std::thread::Builder::new().name("habittart-sync".into()).spawn(move || run(&dir, port));
++    if let Err(e) = spawned {
++        log::warn!("habittart sync: {e}");
++    }
++}
++
++struct State {
++    /// Server files seen in the last pass (`None` before the first one: then every file opens).
++    known: Option<BTreeSet<String>>,
++    /// Files this run joined (each at most once).
++    joined: BTreeSet<String>,
++    /// The document that was offline in the last pass (its name): it goes online when it still is.
++    candidate: Option<String>,
++    /// Documents this run put online, by name, and when (seconds into the run).
++    published: BTreeMap<String, u64>,
++    passes: u64,
++}
++
++fn run(dir: &Path, port: u16) {
++    // Let the window open, recovered documents arrive and startup joins begin first.
++    std::thread::sleep(Duration::from_secs(10));
++    let mut st = State { known: None, joined: BTreeSet::new(), candidate: None, published: BTreeMap::new(), passes: 0 };
++    loop {
++        if let Err(e) = pass(dir, port, &mut st) {
++            log::info!("habittart sync: {e}");
++        }
++        st.passes += 1;
++        std::thread::sleep(EVERY);
++    }
++}
++
++/// Where the server's address and key may be: the settings folder first, then the private files
++/// on this computer that the server's setup and Google Drive keep.
++fn server_files(dir: &Path) -> Vec<PathBuf> {
++    let mut out = vec![dir.join(SERVER_FILE)];
++    // On macOS, Documents and Google Drive are behind a permission prompt: the updater copies the
++    // file into the settings folder instead (it runs in the Terminal, which may read them).
++    if cfg!(target_os = "macos") {
++        return out;
++    }
++    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
++    const DRIVE_NAME: &str = "FigCraft - servidor (PRIVADO).txt";
++    if let Some(h) = &home {
++        out.push(h.join("Documents").join("figcraft-oracle").join("endereco-servidor-PRIVADO.txt"));
++        out.push(h.join("Documentos").join("figcraft-oracle").join("endereco-servidor-PRIVADO.txt"));
++    }
++    // Google Drive for desktop on Windows: a drive letter with "My Drive" in it.
++    if cfg!(target_os = "windows") {
++        for letter in b'D'..=b'Z' {
++            for d in ["Meu Drive", "My Drive"] {
++                out.push(PathBuf::from(format!("{}:\\{d}\\{DRIVE_NAME}", letter as char)));
++            }
++        }
++    }
++    out
++}
++
++/// The server and its key, from the first of [`server_files`] that names them.
++fn server(dir: &Path) -> Option<(Endpoint, String, String)> {
++    for f in server_files(dir) {
++        let Ok(text) = std::fs::read_to_string(&f) else { continue };
++        for word in text.split_whitespace() {
++            if !(word.starts_with("wss://") || word.starts_with("ws://")) {
++                continue;
++            }
++            let Ok((endpoint, pairs)) = Endpoint::parse(word) else { continue };
++            if let Some((_, key)) = pairs.into_iter().find(|(k, v)| k == "key" && !v.is_empty()) {
++                // Keep a copy in the settings folder, so it is found even if the original moves.
++                let own = dir.join(SERVER_FILE);
++                if f != own && !own.exists() {
++                    let _ = std::fs::create_dir_all(dir).and_then(|()| write_private(&own, &format!("{word}\n")));
++                }
++                return Some((endpoint, key, word.to_string()));
++            }
++        }
++    }
++    None
++}
++
++fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
++    std::fs::write(path, text)?;
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::PermissionsExt;
++        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
++    }
++    Ok(())
++}
++
++fn pass(dir: &Path, port: u16, st: &mut State) -> Result<(), String> {
++    let Some((endpoint, key, address)) = server(dir) else { return Ok(()) };
++    let limits = NetLimits::default();
++    let timeout = Duration::from_secs(20);
++    let files = match manage::request(&endpoint, &key, vec![Admin::Files], &limits, timeout)?.into_iter().next() {
++        Some(AdminReply::Files(f)) => f,
++        Some(AdminReply::Failed { reason }) => return Err(reason),
++        other => return Err(format!("unexpected answer to the file list: {}", other.map_or("none", |_| "other"))),
++    };
++    let peers = rpc(port, "engine.execute", json!({"command": "collab.peers", "params": {}}))?;
++    let open = open_files(&peers);
++
++    // 1. Every file on the server is open here.
++    let mut links = load_links(dir);
++    let mut joins = 0;
++    for f in &files {
++        let new_here = st.known.as_ref().is_none_or(|k| !k.contains(&f.id));
++        if !new_here || open.contains(&f.id) || st.joined.contains(&f.id) || joins >= JOINS_PER_PASS {
++            continue;
++        }
++        let link = match links.get(&f.id) {
++            Some(l) => l.clone(),
++            None => {
++                let l = new_link(&endpoint, &key, f, &limits, timeout)?;
++                links.insert(f.id.clone(), l.clone());
++                save_links(dir, &links);
++                l
++            }
++        };
++        match rpc(port, "engine.execute", json!({"command": "collab.join", "params": {"link": link}})) {
++            Ok(_) => log::info!("habittart sync: opening {} from the server", f.name),
++            Err(e) => log::info!("habittart sync: {}: {e}", f.name),
++        }
++        st.joined.insert(f.id.clone());
++        joins += 1;
++    }
++    // Files left for the next pass aren't counted as seen yet.
++    let mut seen: BTreeSet<String> = files.iter().map(|f| f.id.clone()).collect();
++    if joins >= JOINS_PER_PASS {
++        seen.retain(|id| open.contains(id) || st.joined.contains(id));
++    }
++    st.known = Some(seen);
++
++    // 2. The document shown, when it isn't online, goes to the server.
++    if joins > 0 {
++        st.candidate = None;
++        return Ok(());
++    }
++    let offline = peers.get("session").is_none_or(Value::is_null) && peers.get("status").and_then(Value::as_str).is_none_or(|s| s == "off");
++    let ui = rpc(port, "ui.inspect", json!({}))?;
++    let home = ui.get("home").and_then(Value::as_bool).unwrap_or(false);
++    let status = ui.get("status").cloned().unwrap_or(Value::Null);
++    let name = status.get("document").and_then(Value::as_str).unwrap_or("").to_string();
++    let from_disk = status.get("path").is_some_and(|p| !p.is_null());
++    if !offline || home || name.is_empty() {
++        st.candidate = None;
++        return Ok(());
++    }
++    if from_disk && files.iter().any(|f| f.name == name) {
++        st.candidate = None;
++        return Ok(());
++    }
++    if st.published.get(&name).is_some_and(|at| st.passes.saturating_sub(*at) < 6) {
++        // Just put online under this name: its session is still on its way.
++        return Ok(());
++    }
++    if !has_content(port)? {
++        st.candidate = None;
++        return Ok(());
++    }
++    // Offline in two passes in a row (not a document on its way to a session).
++    if st.candidate.as_deref() != Some(name.as_str()) {
++        st.candidate = Some(name);
++        return Ok(());
++    }
++    st.candidate = None;
++    match rpc(port, "engine.execute", json!({"command": "collab.publish", "params": {"server": address, "name": name}})) {
++        Ok(_) => log::info!("habittart sync: putting {name} online"),
++        Err(e) => log::info!("habittart sync: {name}: {e}"),
++    }
++    st.published.insert(name, st.passes);
++    Ok(())
++}
++
++/// The ids of the server files open in this app (in any session that hasn't failed).
++fn open_files(peers: &Value) -> BTreeSet<String> {
++    let mut out = BTreeSet::new();
++    if let Some(sessions) = peers.get("sessions").and_then(Value::as_array) {
++        for s in sessions {
++            if s.get("status").and_then(Value::as_str) == Some("failed") {
++                continue;
++            }
++            if let Some(id) = s.get("link").and_then(Value::as_str).and_then(file_param) {
++                out.insert(id);
++            }
++        }
++    }
++    if let Some(id) = peers.pointer("/published/file").and_then(Value::as_str) {
++        out.insert(id.to_string());
++    }
++    out
++}
++
++fn file_param(link: &str) -> Option<String> {
++    let query = link.split_once('?')?.1;
++    query.split('&').find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == "file").map(|(_, v)| v.to_string()))
++}
++
++/// Whether the document shown has any layer.
++fn has_content(port: u16) -> Result<bool, String> {
++    let pages = rpc(port, "engine.execute", json!({"command": "page.list", "params": {}}))?;
++    Ok(pages.as_array().is_some_and(|ps| ps.iter().any(|p| p.get("children").and_then(Value::as_u64).unwrap_or(0) > 0)))
++}
++
++fn new_link(endpoint: &Endpoint, key: &str, f: &FileInfo, limits: &NetLimits, timeout: Duration) -> Result<String, String> {
++    let label = format!("habittart-{}", computer_name());
++    let req = Admin::CreateLink { file: f.id.clone(), access: Access::Edit, label };
++    match manage::request(endpoint, key, vec![req], limits, timeout)?.into_iter().next() {
++        Some(AdminReply::Link(l)) => Ok(Invite { server: endpoint.clone(), file: f.id.clone(), token: l.token }.link()),
++        Some(AdminReply::Failed { reason }) => Err(format!("{}: {reason}", f.name)),
++        _ => Err(format!("{}: the server didn't make a link", f.name)),
++    }
++}
++
++fn computer_name() -> String {
++    let raw = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| std::env::consts::OS.to_string());
++    raw.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect()
++}
++
++fn load_links(dir: &Path) -> BTreeMap<String, String> {
++    std::fs::read_to_string(dir.join(LINKS_FILE)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
++}
++
++fn save_links(dir: &Path, links: &BTreeMap<String, String>) {
++    if let Ok(text) = serde_json::to_string_pretty(links) {
++        let _ = std::fs::create_dir_all(dir).and_then(|()| write_private(&dir.join(LINKS_FILE), &text));
++    }
++}
++
++/// One request on the app's own control channel: its result, or its error.
++fn rpc(port: u16, method: &str, params: Value) -> Result<Value, String> {
++    let addr = SocketAddr::from(([127, 0, 0, 1], port));
++    let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|e| format!("control channel: {e}"))?;
++    let _ = stream.set_read_timeout(Some(Duration::from_secs(90)));
++    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
++    let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
++    writeln!(writer, "{}", json!({"id": 1, "method": method, "params": params})).map_err(|e| e.to_string())?;
++    let mut line = String::new();
++    BufReader::new(stream).read_line(&mut line).map_err(|e| format!("control channel: {e}"))?;
++    let reply: Value = serde_json::from_str(&line).map_err(|e| format!("control channel: {e}"))?;
++    if reply.get("ok").and_then(Value::as_bool) == Some(true) {
++        Ok(reply.get("result").cloned().unwrap_or(Value::Null))
++    } else {
++        Err(reply.get("error").map_or_else(|| "failed".to_string(), |e| e.as_str().map_or_else(|| e.to_string(), str::to_string)))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn file_ids_come_from_links() {
++        assert_eq!(file_param("figcraft://join?server=wss://h:443/&file=a3b8&token=x").as_deref(), Some("a3b8"));
++        assert_eq!(file_param("figcraft://join?server=wss://h/"), None);
++        let peers = json!({"sessions": [
++            {"status": "live", "link": "figcraft://join?server=wss://h/&file=one&token=t"},
++            {"status": "failed", "link": "figcraft://join?server=wss://h/&file=two&token=t"},
++            {"status": "connecting", "link": null}
++        ], "published": {"file": "three"}});
++        let open = open_files(&peers);
++        assert!(open.contains("one") && open.contains("three") && !open.contains("two"));
++    }
++
++    #[test]
++    fn the_key_is_read_from_the_settings_folder() {
++        let dir = std::env::temp_dir().join(format!("habittart-sync-{}", std::process::id()));
++        let _ = std::fs::create_dir_all(&dir);
++        std::fs::write(dir.join(SERVER_FILE), "endereco:\nwss://example.org/?key=abc\n").unwrap_or_default();
++        let (endpoint, key, address) = server(&dir).unwrap_or((Endpoint::plain("x:1"), String::new(), String::new()));
++        assert_eq!((endpoint.host.as_str(), key.as_str(), address.as_str()), ("example.org:443", "abc", "wss://example.org/?key=abc"));
++        let _ = std::fs::remove_dir_all(&dir);
++    }
++}
+diff --git a/apps/figcraft/src/main.rs b/apps/figcraft/src/main.rs
+index d03bc8f..1817615 100644
+--- a/apps/figcraft/src/main.rs
++++ b/apps/figcraft/src/main.rs
+@@ -23,6 +23,7 @@ mod control_server;
+ mod gamepad;
+ mod graphics;
+ mod habittart;
++mod habittart_sync;
+ #[cfg(target_os = "linux")]
+ mod linux_window;
+ mod recovery;
+@@ -229,6 +230,8 @@ fn main() -> eframe::Result {
+     let queue: Arc<Mutex<Vec<ControlRequest>>> = Arc::new(Mutex::new(Vec::new()));
+     if let Some(p) = port {
+         control_server::start(p, queue.clone(), ctx_slot.clone());
++        // Habittart: every project on the server open here, and every new one put online.
++        habittart_sync::start(services::config_dir(), p);
+     }
+     let icon = services::window_icon();
+     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name

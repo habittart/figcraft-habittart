@@ -34,6 +34,12 @@ for f in "$STATE/link-edicao-PRIVADO.txt" "$HOME/Documents/figcraft-oracle/link-
   L=$(grep -o 'figcraft://join?[^ ]*' "$f" 2>/dev/null | head -1 || true)
   if [ -n "$L" ]; then (umask 077; printf '%s\n' "$L" > "$CFGDIR/habittart-autojoin.txt"); break; fi
 done
+# O endereco do servidor com a chave: o FigCraft abre sozinho todos os projetos do servidor e
+# publica os novos (o app nao le Documentos nem o Google Drive, que pedem permissao no macOS).
+for f in "$HOME/Documents/figcraft-oracle/endereco-servidor-PRIVADO.txt" "$HOME"/Library/CloudStorage/GoogleDrive-*/*"/FigCraft - servidor (PRIVADO).txt"; do
+  A=$(grep -oE 'wss?://[^ ]*key=[^ ]*' "$f" 2>/dev/null | head -1 || true)
+  if [ -n "$A" ]; then (umask 077; printf '%s\n' "$A" > "$CFGDIR/habittart-servidor.txt"); break; fi
+done
 
 json() { /usr/bin/python3 -c "import sys,json; d=json.load(sys.stdin); $1"; }
 REL=$(curl -fsSL -H 'User-Agent: figcraft-habittart' "https://api.github.com/repos/$REPO/releases/latest") || { echo "sem rede ou sem versoes ainda"; exit 0; }
