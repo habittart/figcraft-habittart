@@ -1,6 +1,6 @@
 Habittart: todo projeto online sozinho (abre os do servidor e publica os novos), no Mac e no Windows
 Comunidade-ja-tem: habittart-servidor
-Onde: apps/figcraft/src
+Onde: apps/figcraft/src crates/collab-net/src
 
 diff --git a/apps/figcraft/Cargo.toml b/apps/figcraft/Cargo.toml
 index 40e997f..00c9c72 100644
@@ -16,10 +16,10 @@ index 40e997f..00c9c72 100644
  egui = { workspace = true }
 diff --git a/apps/figcraft/src/habittart_sync.rs b/apps/figcraft/src/habittart_sync.rs
 new file mode 100644
-index 0000000..c53795d
+index 0000000..afed8c2
 --- /dev/null
 +++ b/apps/figcraft/src/habittart_sync.rs
-@@ -0,0 +1,320 @@
+@@ -0,0 +1,327 @@
 +//! Habittart: every project online, on every computer, with nothing to do by hand.
 +//!
 +//! With the server's address and key (`wss://host/?key=…`) in `habittart-servidor.txt` in the
@@ -71,6 +71,8 @@ index 0000000..c53795d
 +    /// Documents this run put online, by name, and when (seconds into the run).
 +    published: BTreeMap<String, u64>,
 +    passes: u64,
++    /// Times each document was sent to the server, by name.
++    tries: BTreeMap<String, u32>,
 +    /// The home screen was put away once at start.
 +    left_home: bool,
 +}
@@ -78,7 +80,7 @@ index 0000000..c53795d
 +fn run(dir: &Path, port: u16) {
 +    // Let the window open, recovered documents arrive and startup joins begin first.
 +    std::thread::sleep(Duration::from_secs(10));
-+    let mut st = State { known: None, joined: BTreeSet::new(), candidate: None, published: BTreeMap::new(), passes: 0, left_home: false };
++    let mut st = State { known: None, joined: BTreeSet::new(), candidate: None, published: BTreeMap::new(), passes: 0, tries: BTreeMap::new(), left_home: false };
 +    loop {
 +        if let Err(e) = pass(dir, port, &mut st) {
 +            log::info!("habittart sync: {e}");
@@ -218,6 +220,10 @@ index 0000000..c53795d
 +        st.candidate = None;
 +        return Ok(());
 +    }
++    if st.tries.get(&name).copied().unwrap_or(0) >= 3 {
++        // Three tries that didn't go online: left alone until the app starts again.
++        return Ok(());
++    }
 +    if st.published.get(&name).is_some_and(|at| st.passes.saturating_sub(*at) < 6) {
 +        // Just put online under this name: its session is still on its way.
 +        return Ok(());
@@ -236,6 +242,7 @@ index 0000000..c53795d
 +        Ok(_) => log::info!("habittart sync: putting {name} online"),
 +        Err(e) => log::info!("habittart sync: {name}: {e}"),
 +    }
++    *st.tries.entry(name.clone()).or_insert(0) += 1;
 +    st.published.insert(name, st.passes);
 +    Ok(())
 +}
@@ -361,3 +368,25 @@ index 88693b0..87c640c 100644
      }
      let icon = services::window_icon();
      // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
+diff --git a/crates/collab-net/src/link.rs b/crates/collab-net/src/link.rs
+index a84395a..e0124df 100644
+--- a/crates/collab-net/src/link.rs
++++ b/crates/collab-net/src/link.rs
+@@ -26,6 +26,8 @@ pub const DEFAULT_PORT: u16 = 47900;
+ 
+ /// How long a request to a server (outside a session) waits for its connection.
+ const CONNECT: Duration = Duration::from_secs(5);
++/// Habittart: a large file (images) takes longer than that to send and for the server to keep.
++const PUBLISH: Duration = Duration::from_secs(600);
+ 
+ enum Active {
+     Host(Host),
+@@ -289,7 +291,7 @@ fn upload(o: PublishOptions, limits: &NetLimits) -> Result<Published, String> {
+     let (server, query) = Endpoint::parse(&o.server)?;
+     let key = o.key.or_else(|| query.into_iter().find(|(k, _)| k == "key").map(|(_, v)| v)).filter(|k| !k.trim().is_empty());
+     let key = key.ok_or("the server address needs the server's key (ws://host:port/?key=…; `figcraft-server key` prints it)")?;
+-    upload_file(&server, Some(&key), &o.name, &o.doc, limits, CONNECT).map(|(_, published, _)| published)
++    upload_file(&server, Some(&key), &o.name, &o.doc, limits, PUBLISH).map(|(_, published, _)| published)
+ }
+ 
+ /// What the server at `server` says about its hosting, and its answer to `req` about `file` with
