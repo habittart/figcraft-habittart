@@ -3,10 +3,10 @@ Comunidade-ja-tem: livetype
 Onde: crates/text/src
 
 diff --git a/crates/text/src/fontdb.rs b/crates/text/src/fontdb.rs
-index 2c584eb..f2ad739 100644
+index a6d52d6..045e2a0 100644
 --- a/crates/text/src/fontdb.rs
 +++ b/crates/text/src/fontdb.rs
-@@ -655,7 +655,12 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
+@@ -697,7 +697,12 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
          v.push("/System/Library/Fonts".into());
          v.push("/Library/Fonts".into());
          if let Some(h) = std::env::var_os("HOME") {
@@ -18,9 +18,9 @@ index 2c584eb..f2ad739 100644
 +            // them although they are not in a Fonts folder.
 +            v.push(h.join("Library/Application Support/Adobe/CoreSync/plugins/livetype/.r"));
          }
-     }
-     #[cfg(target_os = "windows")]
-@@ -665,6 +670,10 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
+         // Fonts the system downloads (PingFang and other CJK faces on current versions) live in
+         // its asset store; `Assets` is the older versions' store.
+@@ -712,6 +717,10 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
          if let Some(l) = std::env::var_os("LOCALAPPDATA") {
              v.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
          }
@@ -31,7 +31,7 @@ index 2c584eb..f2ad739 100644
      }
      #[cfg(all(unix, not(target_os = "macos")))]
      {
-@@ -696,7 +705,7 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
+@@ -770,7 +779,7 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
              continue;
          }
          let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
@@ -39,8 +39,8 @@ index 2c584eb..f2ad739 100644
 +        if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") && !(in_adobe_fonts(&path) && looks_like_font(&path)) {
              continue;
          }
-         // Skip very large files (colour emoji); they are not outline fonts we can draw anyway.
-@@ -707,6 +716,20 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
+         // Very large files are indexed all the same (Apple Color Emoji is ~180 MB and is where the
+@@ -783,6 +792,20 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
      }
  }
  

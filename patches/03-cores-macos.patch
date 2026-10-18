@@ -3,7 +3,7 @@ Comunidade-ja-tem: setColorspace|kCGColorSpaceSRGB
 Onde: apps/figcraft/src crates/ui-egui/src
 
 diff --git a/apps/figcraft/Cargo.toml b/apps/figcraft/Cargo.toml
-index b64b68d..010f80d 100644
+index fac4842..40e997f 100644
 --- a/apps/figcraft/Cargo.toml
 +++ b/apps/figcraft/Cargo.toml
 @@ -7,8 +7,21 @@ publish = false
@@ -30,15 +30,19 @@ index b64b68d..010f80d 100644
  
  [dependencies]
  figcraft-engine = { workspace = true }
-@@ -34,5 +47,8 @@ windows = { version = "0.62", default-features = false, features = ["UI_ViewMana
+@@ -37,10 +50,12 @@ windows = { version = "0.62", default-features = false, features = ["UI_ViewMana
+ # unsafe, which the workspace forbids). Pinned exactly: review the diff before bumping.
+ [target.'cfg(target_os = "macos")'.dependencies]
+ fmv-macos-events = "=0.1.0"
++objc2 = "0.6"
+ 
  [dev-dependencies]
  wat = { workspace = true }
  
-+[target.'cfg(target_os = "macos")'.dependencies]
-+objc2 = "0.6"
 +
  [build-dependencies]
  winresource = "0.1"
+ 
 diff --git a/apps/figcraft/src/color_match.rs b/apps/figcraft/src/color_match.rs
 new file mode 100644
 index 0000000..81804ae
@@ -149,19 +153,19 @@ index 0000000..81804ae
 +    }
 +}
 diff --git a/apps/figcraft/src/main.rs b/apps/figcraft/src/main.rs
-index 0332f7d..bf140a7 100644
+index 10147c2..a11d14d 100644
 --- a/apps/figcraft/src/main.rs
 +++ b/apps/figcraft/src/main.rs
-@@ -10,6 +10,8 @@
- #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
- 
+@@ -17,6 +17,8 @@
+ #[cfg(target_os = "macos")]
+ mod apple_events;
  mod args;
 +#[cfg(target_os = "macos")]
 +mod color_match;
  mod control_server;
  mod gamepad;
  mod graphics;
-@@ -47,6 +49,9 @@ struct App {
+@@ -64,6 +66,9 @@ struct App {
  
  impl eframe::App for App {
      fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
